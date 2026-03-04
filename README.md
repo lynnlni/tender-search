@@ -13,6 +13,7 @@
 - 🗺️ **全国覆盖** - 支持全国及 31 个省市自治区
 - 📋 **友好输出** - 默认 Markdown 表格，支持详细模式和 JSON 导出
 - 🔍 **详情查看** - 支持通过API获取公告完整内容
+- 🌐 **智能绕过** - 对招标公告类型自动使用浏览器回退策略绕过BotSec拦截
 
 ## 🚀 快速开始
 
@@ -141,6 +142,31 @@ python detail.py --id "4793454332945260544" --type "ResultAnnounc" --security-co
 - `ResultAnnounc` - 采购结果公示
 - `PurchaseAnnounceBasic` - 采购公告
 - `CompareSelect` - 比选公告
+- `TenderAnnouncement` - 招标公告
+- `Prequalfication` - 资格预审
+
+## 🔧 技术实现
+
+### 混合策略详情获取
+
+由于中国电信阳光采购网对招标公告类型启用了BotSec防护，Python直接请求会被拦截（403错误）。本工具实现了智能混合策略：
+
+1. **API优先**: 首先尝试使用Python aiohttp直接请求API
+2. **浏览器回退**: 对于招标公告类型或被拦截的请求，自动切换到浏览器执行fetch
+3. **数据统一**: 无论通过哪种方式获取，返回的数据格式保持一致
+
+### 浏览器自动化依赖
+
+使用浏览器回退功能需要：
+1. Chrome浏览器已安装
+2. 启动Chrome时启用远程调试端口（`--remote-debugging-port=9222`）
+3. `browser` skill可用（位于 `~/.claude/skills/browser`）
+
+启动Chrome：
+```bash
+cd ~/.claude/skills/browser
+node scripts/start.cjs --profile
+```
 
 ## 🔧 作为 Claude Skill 使用
 
