@@ -165,7 +165,12 @@ python detail.py --id "4793454332945260544" --type "ResultAnnounc" --security-co
 启动Chrome：
 ```bash
 cd ~/.claude/skills/browser
+
+# 有图形界面模式（适合本地开发）
 node scripts/start.cjs --profile
+
+# 无头模式（适合服务器环境，无图形界面）
+node scripts/start.cjs --headless --profile
 ```
 
 ## 🔧 作为 Claude Skill 使用
