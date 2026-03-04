@@ -13,6 +13,7 @@
 import asyncio
 import argparse
 import json
+import subprocess
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import aiohttp
@@ -175,17 +176,15 @@ class TenderSearcher:
 
         return all_items[:max_items]
 
-    async def get_detail(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """获取公告详情"""
+    async def get_detail(self, item: Dict[str, Any], use_browser_fallback: bool = True) -> Dict[str, Any]:
+        """获取公告详情（支持API优先+浏览器回退的混合策略）"""
         doc_type_code = item.get('docTypeCode', '')
         endpoint = DETAIL_ENDPOINTS.get(doc_type_code, '/portal/base/resultannounc/view')
 
         # 根据公告类型选择正确的ID字段
-        # TenderAnnouncement 类型使用 id 字段，其他类型使用 docId 字段
-        if doc_type_code == 'TenderAnnouncement':
-            doc_id = item.get('id', '')
-        else:
-            doc_id = item.get('docId', item.get('id', ''))
+        # 注意：TenderAnnouncement类型实际上需要使用docId字段（而不是id字段）
+        # id字段是内部编码，docId字段才是API需要的文档ID
+        doc_id = item.get('docId', item.get('id', ''))
 
         security_code = item.get('securityViewCode', '')
 
@@ -205,20 +204,90 @@ class TenderSearcher:
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         }
 
+        # 对于招标公告类型，直接使用浏览器回退（因为已知会被BotSec拦截）
+        if use_browser_fallback and doc_type_code == 'TenderAnnouncement':
+            return await self._fetch_via_browser(endpoint, params, doc_type_code, doc_id, security_code)
+
+        # 第一步：尝试使用Python直接请求API
         try:
             async with self.http_client.session.post(f'{API_BASE_URL}{endpoint}', json=params, headers=headers) as resp:
                 data = await resp.json()
                 if data.get('code') == 200:
                     return data.get('data', {})
                 else:
-                    return {'error': data.get('msg', '获取详情失败')}
+                    error_msg = data.get('msg', '获取详情失败')
+                    # 如果是权限错误且允许浏览器回退，则尝试浏览器
+                    if use_browser_fallback and ('权限' in error_msg or '登录' in error_msg or '没有权限' in error_msg):
+                        return await self._fetch_via_browser(endpoint, params, doc_type_code, doc_id, security_code)
+                    return {'error': error_msg}
         except aiohttp.ContentTypeError as e:
-            # 如果是招标公告类型，可能是被BotSec拦截，提供特殊提示
-            if doc_type_code == 'TenderAnnouncement':
-                return {'error': f'招标公告详情需要通过浏览器访问。请使用浏览器访问: {API_BASE_URL}/DeclareDetails?id={doc_id}&type=2&docTypeCode={doc_type_code}&securityViewCode={security_code}'}
+            # 被BotSec拦截，尝试浏览器回退
+            if use_browser_fallback:
+                return await self._fetch_via_browser(endpoint, params, doc_type_code, doc_id, security_code)
             return {'error': f'请求被拒绝: {str(e)}'}
         except Exception as e:
+            # 其他错误，尝试浏览器回退
+            if use_browser_fallback:
+                return await self._fetch_via_browser(endpoint, params, doc_type_code, doc_id, security_code)
             return {'error': str(e)}
+
+    async def _fetch_via_browser(self, endpoint: str, params: Dict[str, Any],
+                                  doc_type_code: str, doc_id: str, security_code: str) -> Dict[str, Any]:
+        """通过浏览器获取详情（绕过BotSec）"""
+        url = f"{API_BASE_URL}{endpoint}"
+
+        # 直接在JS中使用对象字面量，而不是传递JSON字符串给JSON.stringify
+        # 避免Python的json.dumps产生的引号与JavaScript的引号冲突
+        js_code = f'''fetch("{url}", {{method:"POST",headers:{{"Content-Type":"application/json","Referer":"{API_BASE_URL}/search","Origin":"{API_BASE_URL}"}},body:JSON.stringify({{"type":"{doc_type_code}","id":"{doc_id}","securityViewCode":"{security_code}"}})}}).then(r=>r.json()).then(d=>JSON.stringify(d))'''
+
+        try:
+            # 调用browser skill的eval.cjs
+            browser_skill_path = os.path.expanduser("~/.claude/skills/browser")
+            eval_script = os.path.join(browser_skill_path, "scripts", "eval.cjs")
+
+            proc = await asyncio.create_subprocess_exec(
+                'node', eval_script, js_code,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=browser_skill_path
+            )
+
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+
+            if proc.returncode == 0 and stdout:
+                # 解析返回的JSON
+                response_str = stdout.decode().strip()
+
+                # eval.cjs返回的是被引号包裹且内部转义的JSON字符串
+                # 例如: "{\"code\":200,\"data\":{...}}}"
+                # 使用ast.literal_eval来安全地解析这种格式
+                if response_str.startswith('"') and response_str.endswith('"'):
+                    import ast
+                    try:
+                        # 先使用ast.literal_eval解析Python字符串字面量
+                        response_str = ast.literal_eval(response_str)
+                    except:
+                        # 如果失败，手动处理转义
+                        response_str = response_str[1:-1].replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+
+                try:
+                    response_data = json.loads(response_str)
+                except json.JSONDecodeError as e:
+                    # JSON解析失败，返回错误信息
+                    return {'error': f'JSON解析失败: {str(e)}', 'raw_response': response_str[:200]}
+
+                if response_data.get('code') == 200:
+                    return response_data.get('data', {})
+                else:
+                    return {'error': response_data.get('msg', '浏览器获取详情失败')}
+            else:
+                stderr_msg = stderr.decode().strip() if stderr else '未知错误'
+                return {'error': f'浏览器请求失败: {stderr_msg}'}
+
+        except asyncio.TimeoutError:
+            return {'error': '浏览器请求超时'}
+        except Exception as e:
+            return {'error': f'浏览器调用失败: {str(e)}'}
 
 
 def truncate_text(text: str, max_length: int = 40) -> str:
@@ -253,6 +322,56 @@ def format_markdown_table(items: List[Dict[str, Any]], show_category: bool = Tru
     return "\n".join(lines)
 
 
+async def fetch_detail_via_browser(endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """通过浏览器执行fetch请求获取详情（绕过BotSec）"""
+    import urllib.parse
+
+    # 构建fetch代码
+    url = f"{API_BASE_URL}{endpoint}"
+    body_json = json.dumps(params, ensure_ascii=False)
+
+    # 构建在浏览器中执行的JavaScript代码
+    js_code = f'''
+        fetch("{url}", {{
+            method: "POST",
+            headers: {{
+                "Content-Type": "application/json",
+                "Referer": "{API_BASE_URL}/search",
+                "Origin": "{API_BASE_URL}"
+            }},
+            body: JSON.stringify({body_json})
+        }}).then(r => r.json()).then(d => JSON.stringify(d))
+    '''
+
+    # 转义单引号用于shell
+    js_code_escaped = js_code.replace("'", "'\"'\"'")
+
+    try:
+        # 调用browser skill的eval.cjs
+        browser_skill_path = os.path.expanduser("~/.claude/skills/browser")
+        cmd = f"cd {browser_skill_path} && node scripts/eval.cjs '{js_code_escaped}'"
+
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if result.returncode == 0 and result.stdout:
+            # 解析返回的JSON
+            response_data = json.loads(result.stdout.strip().strip('"').replace('\\"', '"'))
+            return response_data
+        else:
+            return {'error': f'浏览器请求失败: {result.stderr or "未知错误"}'}
+
+    except subprocess.TimeoutExpired:
+        return {'error': '浏览器请求超时'}
+    except Exception as e:
+        return {'error': f'浏览器调用失败: {str(e)}'}
+
+
 def clean_html(html_content: str) -> str:
     """清理HTML标签，提取纯文本"""
     if not html_content:
@@ -267,12 +386,29 @@ def format_detail_markdown(item: Dict[str, Any], detail_data: Dict[str, Any] = N
     """格式化为详细Markdown"""
     lines = []
 
-    title = item.get('docTitle', '无标题')
+    # 优先使用detail_data中的字段（如果可用）
+    if detail_data:
+        # 招标公告类型使用不同的字段名
+        title = (detail_data.get('tenderAnnouncementName') or
+                 detail_data.get('purchaseAnnounceName') or
+                 detail_data.get('resultAnnounceName') or
+                 detail_data.get('compareSelectName') or
+                 item.get('docTitle', '无标题'))
+        doc_code = (detail_data.get('tenderAnnouncementCode') or
+                    detail_data.get('purchaseAnnounceCode') or
+                    detail_data.get('resultAnnounceCode') or
+                    item.get('docCode', ''))
+        province = detail_data.get('provinceName', item.get('provinceName', '未知省份'))
+        date = detail_data.get('createTime', item.get('createDate', '未知日期'))
+        company = detail_data.get('companyName', item.get('companyName', ''))
+    else:
+        title = item.get('docTitle', '无标题')
+        doc_code = item.get('docCode', '')
+        province = item.get('provinceName', '未知省份')
+        date = item.get('createDate', '未知日期')
+        company = item.get('companyName', '')
+
     doc_type = item.get('docType', '未知类型')
-    doc_code = item.get('docCode', '')
-    province = item.get('provinceName', '未知省份')
-    date = item.get('createDate', '未知日期')
-    company = item.get('companyName', '')
 
     lines.append(f"## {title}\n")
     lines.append(f"**项目编号**: {doc_code or '无'}  ")
@@ -304,6 +440,11 @@ def format_detail_markdown(item: Dict[str, Any], detail_data: Dict[str, Any] = N
                     if detail_data.get(field):
                         lines.append(clean_html(detail_data.get(field)))
                         break
+
+            # 显示代理机构信息（招标公告类型）
+            agent_name = detail_data.get('agentProviderName')
+            if agent_name:
+                lines.append(f"\n**代理机构**: {agent_name}  ")
 
             # 显示附件信息
             files = detail_data.get('files', [])
