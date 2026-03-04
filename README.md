@@ -53,7 +53,7 @@ python search.py --keyword "大模型" --category "采购结果公示"
 | `--days` | `-d` | 近X天的数据 | `7`, `30` |
 | `--max-items` | `-m` | 最大返回条数 | 默认 `20` |
 | `--output` | `-o` | 输出JSON文件 | `results.json` |
-| `--detail` | - | 详细格式 | 显示完整项目信息 |
+| `--detail` | - | 详细格式 | 显示完整项目信息，**自动获取公告正文** |
 
 ### detail.py - 获取公告详情
 

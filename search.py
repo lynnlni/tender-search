@@ -16,6 +16,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import aiohttp
+from bs4 import BeautifulSoup
 import sys
 import os
 
@@ -42,6 +43,13 @@ CATEGORY_CODES = {
     "谈判采购公告": "e8vif", "评价检测公告": "ds3fd2s", "政企合作招募公告": "f1f7e",
     "IPTV内容合作招募公告": "sxax8", "采购结果公示": "n0eves", "直接采购公示": "ow7t",
     "澄清公示": "th4gie", "政企合作招募结果公示": "s1x5e", "IPTV内容合作评审结果公示": "rasxq"
+}
+
+# 公告类型对应的API端点
+DETAIL_ENDPOINTS = {
+    'ResultAnnounc': '/portal/base/resultannounc/view',
+    'PurchaseAnnounceBasic': '/portal/base/purchaseannounce/view',
+    'CompareSelect': '/portal/base/compareselect/view',
 }
 
 
@@ -165,6 +173,33 @@ class TenderSearcher:
 
         return all_items[:max_items]
 
+    async def get_detail(self, doc_id: str, doc_type_code: str, security_code: str) -> Dict[str, Any]:
+        """获取公告详情"""
+        endpoint = DETAIL_ENDPOINTS.get(doc_type_code, '/portal/base/resultannounc/view')
+
+        params = {
+            'type': doc_type_code,
+            'id': doc_id,
+            'securityViewCode': security_code
+        }
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Referer': f'{API_BASE_URL}/search',
+            'Origin': API_BASE_URL,
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+
+        try:
+            async with self.http_client.session.post(f'{API_BASE_URL}{endpoint}', json=params, headers=headers) as resp:
+                data = await resp.json()
+                if data.get('code') == 200:
+                    return data.get('data', {})
+                else:
+                    return {'error': data.get('msg', '获取详情失败')}
+        except Exception as e:
+            return {'error': str(e)}
+
 
 def truncate_text(text: str, max_length: int = 40) -> str:
     """截断文本"""
@@ -198,7 +233,17 @@ def format_markdown_table(items: List[Dict[str, Any]], show_category: bool = Tru
     return "\n".join(lines)
 
 
-def format_detail_markdown(item: Dict[str, Any]) -> str:
+def clean_html(html_content: str) -> str:
+    """清理HTML标签，提取纯文本"""
+    if not html_content:
+        return ""
+    soup = BeautifulSoup(html_content, 'html.parser')
+    text = soup.get_text(separator='\n', strip=True)
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    return '\n'.join(lines)
+
+
+def format_detail_markdown(item: Dict[str, Any], detail_data: Dict[str, Any] = None) -> str:
     """格式化为详细Markdown"""
     lines = []
 
@@ -216,6 +261,30 @@ def format_detail_markdown(item: Dict[str, Any]) -> str:
     lines.append(f"**发布日期**: {date}  ")
     if company:
         lines.append(f"**采购人**: {company}  ")
+
+    # 如果有详情数据，显示正文内容
+    if detail_data and not detail_data.get('error'):
+        lines.append("\n### 📄 公告正文\n")
+
+        # 获取正文内容（不同字段名）
+        context = detail_data.get('context', '')
+        if context:
+            cleaned_text = clean_html(context)
+            lines.append(cleaned_text)
+        else:
+            # 尝试其他可能的字段
+            for field in ['content', 'description', 'detail', 'body']:
+                if detail_data.get(field):
+                    lines.append(clean_html(detail_data.get(field)))
+                    break
+
+        # 显示附件信息
+        files = detail_data.get('files', [])
+        if files:
+            lines.append("\n### 📎 附件\n")
+            for i, file in enumerate(files, 1):
+                file_name = file.get('fileName', f'附件{i}')
+                lines.append(f"- {file_name}")
 
     lines.append("\n---\n")
 
@@ -271,9 +340,19 @@ async def main():
 
         if items:
             if args.detail:
-                # 详细格式
-                for item in items:
-                    print(format_detail_markdown(item))
+                # 详细格式 - 自动获取详情
+                for idx, item in enumerate(items):
+                    doc_id = item.get('docId', item.get('id', ''))
+                    doc_type_code = item.get('docTypeCode', '')
+                    security_code = item.get('securityViewCode', '')
+
+                    # 获取详情
+                    detail_data = {}
+                    if doc_id and doc_type_code and security_code:
+                        detail_data = await searcher.get_detail(doc_id, doc_type_code, security_code)
+                        await asyncio.sleep(0.3)  # 避免请求过快
+
+                    print(format_detail_markdown(item, detail_data))
             else:
                 # 表格格式
                 print(format_markdown_table(items))
