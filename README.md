@@ -12,13 +12,14 @@
 - 📊 **分类齐全** - 涵盖招标公告、询比公告、采购结果公示等 13 类公告
 - 🗺️ **全国覆盖** - 支持全国及 31 个省市自治区
 - 📋 **友好输出** - 默认 Markdown 表格，支持详细模式和 JSON 导出
+- 🔍 **详情查看** - 支持通过API获取公告完整内容
 
 ## 🚀 快速开始
 
 ### 安装依赖
 
 ```bash
-pip install aiohttp
+pip install aiohttp beautifulsoup4
 ```
 
 ### 基础用法
@@ -53,6 +54,15 @@ python search.py --keyword "大模型" --category "采购结果公示"
 | `--max-items` | `-m` | 最大返回条数 | 默认 `20` |
 | `--output` | `-o` | 输出JSON文件 | `results.json` |
 | `--detail` | - | 详细格式 | 显示完整项目信息 |
+
+### detail.py - 获取公告详情
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `--id` | 公告ID (docId) | `"4793454332945260544"` |
+| `--type` | 公告类型代码 | `"ResultAnnounc"`, `"PurchaseAnnounceBasic"` |
+| `--security-code` | 安全验证码 | `"973dc112651e05ab97fce08d7e4cad8b"` |
+| `--raw` | 输出原始JSON | （可选）|
 
 ### 支持的省份
 
@@ -115,6 +125,23 @@ python search.py --keyword "郑州分公司2026年大模型" --detail
 python search.py --keyword "服务器" --province "全国" --output results.json
 ```
 
+### 获取公告详情
+
+先通过搜索获取公告的 `docId`、`docTypeCode` 和 `securityViewCode`，然后使用 detail.py：
+
+```bash
+# 查看公告详情（格式化输出）
+python detail.py --id "4793454332945260544" --type "ResultAnnounc" --security-code "973dc112651e05ab97fce08d7e4cad8b"
+
+# 查看原始JSON数据
+python detail.py --id "4793454332945260544" --type "ResultAnnounc" --security-code "973dc112651e05ab97fce08d7e4cad8b" --raw
+```
+
+**支持的通知类型：**
+- `ResultAnnounc` - 采购结果公示
+- `PurchaseAnnounceBasic` - 采购公告
+- `CompareSelect` - 比选公告
+
 ## 🔧 作为 Claude Skill 使用
 
 将本项目克隆到 Claude skills 目录：
@@ -137,6 +164,7 @@ tender-search/
 ├── README.md              # 本文件
 ├── SKILL.md               # Claude Skill 说明
 ├── search.py              # 主查询脚本
+├── detail.py              # 获取公告详情
 ├── list_provinces.py      # 列出省份
 └── list_categories.py     # 列出公告分类
 ```

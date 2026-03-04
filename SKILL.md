@@ -78,6 +78,35 @@ python list_provinces.py
 python list_categories.py
 ```
 
+### detail.py - 获取公告详情
+
+**用途**: 通过API直接获取公告完整内容（无需浏览器）
+
+**参数**:
+- `--id`: 公告ID (docId)
+- `--type`: 公告类型代码 (docTypeCode)
+- `--security-code`: 安全验证码 (securityViewCode)
+- `--raw`: 输出原始JSON数据（可选）
+
+**使用示例**:
+
+```bash
+# 获取公告详情（格式化输出）
+python detail.py --id "4793454332945260544" --type "ResultAnnounc" --security-code "973dc112651e05ab97fce08d7e4cad8b"
+
+# 获取原始JSON数据
+python detail.py --id "4793454332945260544" --type "ResultAnnounc" --security-code "973dc112651e05ab97fce08d7e4cad8b" --raw
+```
+
+**工作流程**:
+1. 先用 `search.py` 搜索公告，获取 `docId`、`docTypeCode`、`securityViewCode`
+2. 再用 `detail.py` 传入这些参数获取详情
+
+**支持的公告类型**:
+- `ResultAnnounc` - 采购结果公示
+- `PurchaseAnnounceBasic` - 采购公告
+- `CompareSelect` - 比选公告
+
 ## 支持的省份（32个）
 
 全国、北京、天津、河北、山西、内蒙古、辽宁、吉林、黑龙江、上海、
@@ -105,7 +134,7 @@ python list_categories.py
 ## 依赖
 
 ```bash
-pip install aiohttp
+pip install aiohttp beautifulsoup4
 ```
 
 ## 提示词示例
@@ -116,3 +145,9 @@ pip install aiohttp
 - "搜索全国大模型相关的中标公示"
 - "看看北京服务器项目的招标公告"
 - "找一下郑州大模型项目的采购结果"
+- "获取公告 [公告标题] 的详情"
+
+**查看公告详情的工作流程**：
+1. 先搜索: `python search.py --keyword "鹤壁市场营销支撑服务"`
+2. 从结果中获取 `docId`, `docTypeCode`, `securityViewCode`
+3. 再获取详情: `python detail.py --id "xxx" --type "ResultAnnounc" --security-code "xxx"`
