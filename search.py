@@ -173,9 +173,22 @@ class TenderSearcher:
 
         return all_items[:max_items]
 
-    async def get_detail(self, doc_id: str, doc_type_code: str, security_code: str) -> Dict[str, Any]:
+    async def get_detail(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """获取公告详情"""
+        doc_type_code = item.get('docTypeCode', '')
         endpoint = DETAIL_ENDPOINTS.get(doc_type_code, '/portal/base/resultannounc/view')
+
+        # 根据公告类型选择正确的ID字段
+        # TenderAnnouncement 类型使用 id 字段，其他类型使用 docId 字段
+        if doc_type_code == 'TenderAnnouncement':
+            doc_id = item.get('id', '')
+        else:
+            doc_id = item.get('docId', item.get('id', ''))
+
+        security_code = item.get('securityViewCode', '')
+
+        if not doc_id or not security_code:
+            return {'error': '缺少必要的参数(docId或securityViewCode)'}
 
         params = {
             'type': doc_type_code,
@@ -263,28 +276,35 @@ def format_detail_markdown(item: Dict[str, Any], detail_data: Dict[str, Any] = N
         lines.append(f"**采购人**: {company}  ")
 
     # 如果有详情数据，显示正文内容
-    if detail_data and not detail_data.get('error'):
-        lines.append("\n### 📄 公告正文\n")
-
-        # 获取正文内容（不同字段名）
-        context = detail_data.get('context', '')
-        if context:
-            cleaned_text = clean_html(context)
-            lines.append(cleaned_text)
+    if detail_data:
+        if detail_data.get('error'):
+            # 显示错误提示
+            error_msg = detail_data.get('error', '')
+            lines.append(f"\n⚠️ **无法获取详情**: {error_msg}")
+            if '权限' in error_msg or '登录' in error_msg:
+                lines.append("\n💡 提示：招标公告类型需要登录才能查看详情，建议访问网页查看。")
         else:
-            # 尝试其他可能的字段
-            for field in ['content', 'description', 'detail', 'body']:
-                if detail_data.get(field):
-                    lines.append(clean_html(detail_data.get(field)))
-                    break
+            lines.append("\n### 📄 公告正文\n")
 
-        # 显示附件信息
-        files = detail_data.get('files', [])
-        if files:
-            lines.append("\n### 📎 附件\n")
-            for i, file in enumerate(files, 1):
-                file_name = file.get('fileName', f'附件{i}')
-                lines.append(f"- {file_name}")
+            # 获取正文内容（不同字段名）
+            context = detail_data.get('context', '')
+            if context:
+                cleaned_text = clean_html(context)
+                lines.append(cleaned_text)
+            else:
+                # 尝试其他可能的字段
+                for field in ['content', 'description', 'detail', 'body']:
+                    if detail_data.get(field):
+                        lines.append(clean_html(detail_data.get(field)))
+                        break
+
+            # 显示附件信息
+            files = detail_data.get('files', [])
+            if files:
+                lines.append("\n### 📎 附件\n")
+                for i, file in enumerate(files, 1):
+                    file_name = file.get('fileName', f'附件{i}')
+                    lines.append(f"- {file_name}")
 
     lines.append("\n---\n")
 
@@ -342,15 +362,9 @@ async def main():
             if args.detail:
                 # 详细格式 - 自动获取详情
                 for idx, item in enumerate(items):
-                    doc_id = item.get('docId', item.get('id', ''))
-                    doc_type_code = item.get('docTypeCode', '')
-                    security_code = item.get('securityViewCode', '')
-
-                    # 获取详情
-                    detail_data = {}
-                    if doc_id and doc_type_code and security_code:
-                        detail_data = await searcher.get_detail(doc_id, doc_type_code, security_code)
-                        await asyncio.sleep(0.3)  # 避免请求过快
+                    # 获取详情（内部会根据类型选择正确的ID字段）
+                    detail_data = await searcher.get_detail(item)
+                    await asyncio.sleep(0.3)  # 避免请求过快
 
                     print(format_detail_markdown(item, detail_data))
             else:
