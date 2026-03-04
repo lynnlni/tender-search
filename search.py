@@ -50,6 +50,8 @@ DETAIL_ENDPOINTS = {
     'ResultAnnounc': '/portal/base/resultannounc/view',
     'PurchaseAnnounceBasic': '/portal/base/purchaseannounce/view',
     'CompareSelect': '/portal/base/compareselect/view',
+    'TenderAnnouncement': '/portal/base/tenderannouncement/view',  # 招标公告
+    'Prequalfication': '/portal/base/prequalfication/view',  # 资格预审
 }
 
 
@@ -210,6 +212,11 @@ class TenderSearcher:
                     return data.get('data', {})
                 else:
                     return {'error': data.get('msg', '获取详情失败')}
+        except aiohttp.ContentTypeError as e:
+            # 如果是招标公告类型，可能是被BotSec拦截，提供特殊提示
+            if doc_type_code == 'TenderAnnouncement':
+                return {'error': f'招标公告详情需要通过浏览器访问。请使用浏览器访问: {API_BASE_URL}/DeclareDetails?id={doc_id}&type=2&docTypeCode={doc_type_code}&securityViewCode={security_code}'}
+            return {'error': f'请求被拒绝: {str(e)}'}
         except Exception as e:
             return {'error': str(e)}
 
